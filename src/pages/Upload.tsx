@@ -12,13 +12,15 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle2,
+  Info,
+  Bug,
   type LucideIcon,
 } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { cn } from '@/lib/utils';
 import type { FileType, UploadedFile } from '@/types';
 import { fileTypeLabels } from '@/types';
-import { readFileAsText, cleanExtractedText } from '@/services/fileReader';
+import { readFileAsText, cleanExtractedText, logError } from '@/services/fileReader';
 
 interface UploadZoneProps {
   type: FileType;
@@ -30,6 +32,7 @@ interface UploadZoneProps {
   onFileRemove: (fileId: string) => void;
   highlighted?: boolean;
   delay?: number;
+  onErrorClick?: () => void;
 }
 
 function UploadZone({
@@ -42,8 +45,10 @@ function UploadZone({
   onFileRemove,
   highlighted = false,
   delay = 0,
+  onErrorClick,
 }: UploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
+  const [showErrorDetail, setShowErrorDetail] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -116,6 +121,8 @@ function UploadZone({
         return '';
     }
   };
+
+  const errorFile = showErrorDetail ? files.find(f => f.id === showErrorDetail) : null;
 
   return (
     <div
@@ -197,59 +204,100 @@ function UploadZone({
 
       {files.length > 0 && (
         <div className="mt-4 space-y-2">
-          {files.map((file, index) => (
-            <div
-              key={file.id}
-              className="flex items-center justify-between p-3 bg-slate-50 rounded-lg group animate-slide-in-right"
-              style={{ animationDelay: `${index * 0.05}s` }}
-            >
-              <div className="flex items-center gap-3 min-w-0">
+          {files.map((file, index) => {
+            const hasError = file.uploadStatus === 'format_not_supported' || file.uploadStatus === 'error';
+            return (
+              <div key={file.id} className="space-y-2">
                 <div
                   className={cn(
-                    'w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0',
-                    highlighted ? 'bg-accent-100' : 'bg-primary-100'
+                    'flex items-center justify-between p-3 rounded-lg group animate-slide-in-right',
+                    hasError ? 'bg-amber-50/50' : 'bg-slate-50'
                   )}
+                  style={{ animationDelay: `${index * 0.05}s` }}
                 >
-                  {getStatusIcon(file.uploadStatus) || (
-                    <FileText
-                      size={14}
-                      className={highlighted ? 'text-accent-600' : 'text-primary-600'}
-                    />
-                  )}
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-slate-700 truncate">
-                    {file.fileName}
-                  </p>
-                  <p className="text-xs text-slate-400 flex items-center gap-2">
-                    <span>{formatFileSize(file.size)}</span>
-                    {file.uploadStatus && (
-                      <>
-                        <span>·</span>
-                        <span className={cn(
-                          file.uploadStatus === 'ready' && 'text-green-600',
-                          file.uploadStatus === 'error' && 'text-red-600',
-                          file.uploadStatus === 'format_not_supported' && 'text-amber-600',
-                          (file.uploadStatus === 'uploading' || file.uploadStatus === 'extracting') && 'text-primary-600',
-                        )}>
-                          {getStatusText(file.uploadStatus)}
-                        </span>
-                      </>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      className={cn(
+                        'w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0',
+                        highlighted ? 'bg-accent-100' : 'bg-primary-100',
+                        hasError && 'bg-amber-100'
+                      )}
+                    >
+                      {getStatusIcon(file.uploadStatus) || (
+                        <FileText
+                          size={14}
+                          className={cn(
+                            highlighted ? 'text-accent-600' : 'text-primary-600',
+                            hasError && 'text-amber-600'
+                          )}
+                        />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-700 truncate">
+                        {file.fileName}
+                      </p>
+                      <p className="text-xs text-slate-400 flex items-center gap-2">
+                        <span>{formatFileSize(file.size)}</span>
+                        {file.uploadStatus && (
+                          <>
+                            <span>·</span>
+                            <span className={cn(
+                              file.uploadStatus === 'ready' && 'text-green-600',
+                              file.uploadStatus === 'error' && 'text-red-600',
+                              file.uploadStatus === 'format_not_supported' && 'text-amber-600',
+                              (file.uploadStatus === 'uploading' || file.uploadStatus === 'extracting') && 'text-primary-600',
+                            )}>
+                              {getStatusText(file.uploadStatus)}
+                            </span>
+                          </>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {hasError && (
+                      <button
+                        onClick={() => setShowErrorDetail(showErrorDetail === file.id ? null : file.id)}
+                        className="p-1.5 rounded-lg text-amber-600 hover:bg-amber-100 transition-all"
+                      >
+                        <Info size={14} />
+                      </button>
                     )}
-                  </p>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onFileRemove(file.id);
+                      }}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
                 </div>
+                
+                {hasError && showErrorDetail === file.id && (
+                  <div className="ml-11 p-3 bg-amber-50 rounded-lg border border-amber-100 animate-slide-down">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle size={14} className="text-amber-500 mt-0.5 flex-shrink-0" />
+                      <div className="text-xs text-amber-800 whitespace-pre-wrap">
+                        {file.extractedText || '没有详细错误信息'}
+                      </div>
+                    </div>
+                    {onErrorClick && (
+                      <button
+                        onClick={onErrorClick}
+                        className="mt-2 flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700"
+                      >
+                        <Bug size={12} />
+                        查看完整错误日志
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onFileRemove(file.id);
-                }}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
-              >
-                <X size={16} />
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -346,12 +394,32 @@ export default function Upload() {
         } catch (e) {
           extractedText = '';
           formatSupported = false;
+          if (e instanceof Error) {
+            logError({
+              type: 'file_read',
+              fileName: file.name,
+              fileType: file.type,
+              fileSize: file.size,
+              errorMessage: e.message,
+              errorStack: e.stack,
+              courseId: course.id,
+            });
+          }
         }
 
         if (!formatSupported) {
           updateUploadedFile(course.id, newFileId, {
             uploadStatus: 'format_not_supported',
             extractedText: hint,
+          });
+          logError({
+            type: file.name.toLowerCase().endsWith('.pdf') ? 'pdf_parse' : 'file_read',
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            errorMessage: hint || '格式不支持',
+            details: hint,
+            courseId: course.id,
           });
         } else if (extractedText && extractedText.length > 50) {
           updateUploadedFile(course.id, newFileId, {
@@ -363,9 +431,28 @@ export default function Upload() {
             uploadStatus: 'error',
             extractedText: '',
           });
+          logError({
+            type: 'file_read',
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            errorMessage: '文件内容为空或过短',
+            courseId: course.id,
+          });
         }
       } catch (error) {
         updateUploadedFile(course.id, newFileId, { uploadStatus: 'error' });
+        if (error instanceof Error) {
+          logError({
+            type: 'upload',
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            errorMessage: error.message,
+            errorStack: error.stack,
+            courseId: course.id,
+          });
+        }
       }
     }, 300);
   };
@@ -471,6 +558,7 @@ export default function Upload() {
               files={getFilesByType(config.type)}
               onFileSelect={(file) => handleFileSelect(config.type, file)}
               onFileRemove={(fileId) => handleFileRemove(config.type, fileId)}
+              onErrorClick={() => navigate('/error-log')}
             />
           ))}
         </div>
@@ -485,7 +573,7 @@ export default function Upload() {
               <ul className="text-sm text-slate-600 space-y-1">
                 <li>• 试卷为最高权重分析依据，建议上传2份以上效果更佳</li>
                 <li>• 系统自动识别题目、提取考点、交叉对比生成排行榜</li>
-                <li>• <span className="text-accent-600 font-medium">💡 小提示：</span>支持 .txt 文本文件；如果是图片或PDF，请先复制内容存为文本文件</li>
+                <li>• <span className="text-accent-600 font-medium">💡 小提示：</span>支持 .txt 文本文件；PDF文件会自动解析；图片暂不支持，请复制内容存为文本文件</li>
                 <li>• 所有文件仅在本地浏览器处理，不会上传到任何服务器</li>
               </ul>
             </div>

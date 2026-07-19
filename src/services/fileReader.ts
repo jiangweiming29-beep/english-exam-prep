@@ -1,34 +1,51 @@
+import * as pdfjsLib from 'pdfjs-dist';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.js';
+
 export interface FileReadResult {
   text: string;
   formatSupported: boolean;
   hint?: string;
 }
 
+export interface ErrorLog {
+  id: string;
+  timestamp: Date;
+  type: 'file_read' | 'pdf_parse' | 'upload' | 'analysis' | 'other';
+  fileName?: string;
+  fileType?: string;
+  fileSize?: number;
+  errorMessage: string;
+  errorStack?: string;
+  details?: string;
+  courseId?: string;
+}
+
 export async function readFileAsText(file: File): Promise<FileReadResult> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onload = (e) => {
-      const result = e.target?.result;
-      let text = '';
-      if (typeof result === 'string') {
-        text = result;
-      } else if (result instanceof ArrayBuffer) {
-        const decoder = new TextDecoder('utf-8');
-        text = decoder.decode(result);
-      }
-      resolve({ text, formatSupported: true });
-    };
-
-    reader.onerror = () => {
-      reject(new Error('文件读取失败'));
-    };
-
     const fileName = file.name.toLowerCase();
 
-    if (fileName.endsWith('.txt')) {
+    if (fileName.endsWith('.pdf')) {
+      readPdfFile(file)
+        .then((result) => resolve(result))
+        .catch((error) => {
+          reject(new Error(`PDF解析失败: ${error.message}`));
+        });
+    } else if (fileName.endsWith('.txt')) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const text = e.target?.result as string || '';
+        resolve({ text, formatSupported: true });
+      };
+      reader.onerror = () => reject(new Error('文件读取失败'));
       reader.readAsText(file, 'UTF-8');
     } else if (file.type.startsWith('text/')) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const text = e.target?.result as string || '';
+        resolve({ text, formatSupported: true });
+      };
+      reader.onerror = () => reject(new Error('文件读取失败'));
       reader.readAsText(file, 'UTF-8');
     } else if (file.type.startsWith('image/')) {
       const hint = `当前版本暂不支持图片OCR文字识别。
@@ -43,21 +60,6 @@ export async function readFileAsText(file: File): Promise<FileReadResult> {
 - 填空题：1. ____________
 - 阅读理解：Passage 1 / 阅读短文...
 - 写作题：书面表达 / 写作`;
-      resolve({ text: '', formatSupported: false, hint });
-    } else if (fileName.endsWith('.pdf')) {
-      const hint = `当前版本暂不支持直接解析PDF文件内容。
-
-建议操作：
-1. 打开PDF文件，全选文字（Ctrl+A）
-2. 复制文字内容（Ctrl+C）
-3. 打开记事本，粘贴内容（Ctrl+V）
-4. 保存为 .txt 文件
-5. 再上传 .txt 文件进行分析
-
-小技巧：
-• 确保试卷内容完整，包括题目、选项、阅读文章等
-• 如果是扫描版PDF，请先用OCR软件识别文字
-• 建议上传2份以上试卷，分析结果更准确`;
       resolve({ text: '', formatSupported: false, hint });
     } else if (fileName.endsWith('.doc') || fileName.endsWith('.docx')) {
       const hint = `当前版本暂不支持直接解析Word文件内容。
@@ -74,9 +76,85 @@ export async function readFileAsText(file: File): Promise<FileReadResult> {
 • 阅读文章和写作题也要完整复制`;
       resolve({ text: '', formatSupported: false, hint });
     } else {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const result = e.target?.result;
+        let text = '';
+        if (typeof result === 'string') {
+          text = result;
+        } else if (result instanceof ArrayBuffer) {
+          const decoder = new TextDecoder('utf-8');
+          text = decoder.decode(result);
+        }
+        resolve({ text, formatSupported: true });
+      };
+      reader.onerror = () => reject(new Error('文件读取失败'));
       reader.readAsText(file, 'UTF-8');
     }
   });
+}
+
+async function readPdfFile(file: File): Promise<FileReadResult> {
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({
+      data: arrayBuffer,
+      useWorkerFetch: false,
+    }).promise;
+
+    let fullText = '';
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      const page = await pdf.getPage(pageNum);
+      const textContent = await page.getTextContent();
+      const pageText = (textContent.items as any[])
+        .filter((item) => typeof item === 'object' && item !== null && 'str' in item)
+        .map((item) => item.str)
+        .join('');
+      fullText += pageText + '\n\n';
+    }
+
+    fullText = fullText.trim();
+
+    if (fullText.length === 0) {
+      return {
+        text: '',
+        formatSupported: false,
+        hint: 'PDF文件内容为空或无法提取文字。如果是扫描版PDF，请先用OCR软件识别文字后保存为.txt文件再上传。',
+      };
+    }
+
+    return {
+      text: fullText,
+      formatSupported: true,
+    };
+  } catch (error) {
+    let errorMessage = '未知错误';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    }
+
+    let hint = '';
+    if (errorMessage.includes('Invalid PDF structure')) {
+      hint = 'PDF文件格式无效或已损坏。请检查文件是否完整，或尝试重新下载。';
+    } else if (errorMessage.includes('Password')) {
+      hint = 'PDF文件受密码保护。请先移除密码保护，或将内容复制到.txt文件后再上传。';
+    } else if (errorMessage.includes('Failed to fetch')) {
+      hint = 'PDF解析服务加载失败，请检查网络连接，或尝试将PDF内容复制到.txt文件后上传。';
+    } else {
+      hint = `PDF解析失败: ${errorMessage}
+
+建议操作：
+1. 尝试打开PDF文件确认文件是否正常
+2. 如果文件正常，将内容复制到.txt文件后再上传
+3. 如果是扫描版PDF，请先用OCR软件识别文字`;
+    }
+
+    return {
+      text: '',
+      formatSupported: false,
+      hint,
+    };
+  }
 }
 
 export function cleanExtractedText(text: string): string {
@@ -94,4 +172,37 @@ export function estimateQuestionCount(text: string): number {
   const numberedPattern = /\d+\.\s/g;
   const matches = text.match(numberedPattern);
   return matches ? matches.length : 0;
+}
+
+export function logError(log: Omit<ErrorLog, 'id' | 'timestamp'>): void {
+  const errorLog: ErrorLog = {
+    ...log,
+    id: crypto.randomUUID(),
+    timestamp: new Date(),
+  };
+
+  try {
+    const logs = JSON.parse(localStorage.getItem('errorLogs') || '[]');
+    logs.push(errorLog);
+    if (logs.length > 100) {
+      logs.splice(0, logs.length - 100);
+    }
+    localStorage.setItem('errorLogs', JSON.stringify(logs));
+  } catch {
+    console.error('Failed to save error log');
+  }
+
+  console.error('Error Log:', errorLog);
+}
+
+export function getErrorLogs(): ErrorLog[] {
+  try {
+    return JSON.parse(localStorage.getItem('errorLogs') || '[]');
+  } catch {
+    return [];
+  }
+}
+
+export function clearErrorLogs(): void {
+  localStorage.removeItem('errorLogs');
 }

@@ -7,6 +7,7 @@ import PreviewMap from '@/pages/PreviewMap';
 import TextbookMapping from '@/pages/TextbookMapping';
 import PreviewPlan from '@/pages/PreviewPlan';
 import FullReport from '@/pages/FullReport';
+import ErrorLog from '@/pages/ErrorLog';
 import { AnalysisLayout } from '@/components/AnalysisLayout';
 
 function AnalysisRoute({ children }: { children: React.ReactNode }) {
@@ -71,6 +72,8 @@ export default function App() {
             </AnalysisRoute>
           }
         />
+        
+        <Route path="/error-log" element={<ErrorLog />} />
         
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

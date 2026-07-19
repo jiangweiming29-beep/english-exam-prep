@@ -6,7 +6,7 @@ import tsconfigPaths from "vite-tsconfig-paths";
 export default defineConfig({
   // GitHub Pages 部署时使用 /yuxi-codex/ 作为 base 路径
   // 本地开发时使用 '/'
-  base: process.env.GITHUB_PAGES ? '/yuxi-codex/' : '/',
+  base: process.env.GITHUB_PAGES ? '/english-exam-prep/' : '/',
   server: {
     allowedHosts: true,
   },

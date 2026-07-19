@@ -1,8 +1,6 @@
-// PDF解析服务 - 使用CDN动态加载pdfjs-dist
 import { logError } from './errorLogger';
 import type { ErrorLog } from './errorLogger';
 
-// 重新导出错误日志相关功能，保持向后兼容
 export { logError, getErrorLogs, clearErrorLogs } from './errorLogger';
 export type { ErrorLog };
 
@@ -12,7 +10,6 @@ export interface FileReadResult {
   hint?: string;
 }
 
-// PDF.js CDN配置 - 使用稳定版本3.11.174
 const PDFJS_CDN_VERSION = '3.11.174';
 const PDFJS_CDN_BASE = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_CDN_VERSION}`;
 const PDFJS_MAIN_URL = `${PDFJS_CDN_BASE}/pdf.min.js`;
@@ -20,21 +17,15 @@ const PDFJS_WORKER_URL = `${PDFJS_CDN_BASE}/pdf.worker.min.js`;
 
 let pdfjsLibLoaded: any = null;
 
-// 动态加载pdfjs-dist主库
 async function loadPdfjsLib(): Promise<any> {
   if (pdfjsLibLoaded) {
     return pdfjsLibLoaded;
   }
 
-  console.log(`[PDF解析] 正在从CDN加载pdfjs-dist: ${PDFJS_MAIN_URL}`);
-
   return new Promise((resolve, reject) => {
-    // 检查是否已加载
     if ((window as any).pdfjsLib) {
       pdfjsLibLoaded = (window as any).pdfjsLib;
-      // 设置worker
       pdfjsLibLoaded.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
-      console.log('[PDF解析] pdfjs-dist已加载（缓存）');
       resolve(pdfjsLibLoaded);
       return;
     }
@@ -48,10 +39,8 @@ async function loadPdfjsLib(): Promise<any> {
         reject(new Error('pdfjs-dist加载失败：全局对象未找到'));
         return;
       }
-      // 设置worker路径
       lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
       pdfjsLibLoaded = lib;
-      console.log('[PDF解析] pdfjs-dist加载成功');
       resolve(lib);
     };
     script.onerror = () => {
@@ -67,6 +56,12 @@ export async function readFileAsText(file: File): Promise<FileReadResult> {
   if (fileName.endsWith('.pdf')) {
     return readPdfFile(file);
   } else if (fileName.endsWith('.txt')) {
+    const text = await readFileAsTextRaw(file);
+    return { text, formatSupported: true };
+  } else if (fileName.endsWith('.md')) {
+    const text = await readFileAsTextRaw(file);
+    return { text, formatSupported: true };
+  } else if (fileName.endsWith('.json')) {
     const text = await readFileAsTextRaw(file);
     return { text, formatSupported: true };
   } else if (file.type.startsWith('text/')) {
@@ -100,9 +95,20 @@ export async function readFileAsText(file: File): Promise<FileReadResult> {
 • 请确保保留题目编号和选项格式
 • 阅读文章和写作题也要完整复制`;
     return { text: '', formatSupported: false, hint };
+  } else if (fileName.endsWith('.xls') || fileName.endsWith('.xlsx')) {
+    const hint = `当前版本暂不支持直接解析Excel文件内容。
+
+建议操作：
+1. 打开Excel文件，复制需要的内容
+2. 粘贴到记事本中保存为 .txt 文件
+3. 再上传 .txt 文件进行分析`;
+    return { text: '', formatSupported: false, hint };
   } else {
     const text = await readFileAsTextRaw(file);
-    return { text, formatSupported: true };
+    if (text.length > 0) {
+      return { text, formatSupported: true };
+    }
+    return { text: '', formatSupported: false, hint: '无法识别的文件格式，请上传PDF、TXT、Word等文本类文件。' };
   }
 }
 
@@ -129,11 +135,8 @@ async function readPdfFile(file: File): Promise<FileReadResult> {
   try {
     console.log(`[PDF解析] 开始解析文件: ${file.name}, 大小: ${file.size} bytes`);
 
-    // 动态加载pdfjs-dist
     const pdfjsLib = await loadPdfjsLib();
-
     const arrayBuffer = await file.arrayBuffer();
-    console.log(`[PDF解析] 文件读取完成，字节数: ${arrayBuffer.byteLength}`);
 
     const pdf = await pdfjsLib.getDocument({
       data: arrayBuffer,
@@ -142,6 +145,9 @@ async function readPdfFile(file: File): Promise<FileReadResult> {
     console.log(`[PDF解析] PDF文档加载成功，页数: ${pdf.numPages}`);
 
     let fullText = '';
+    let totalCharacters = 0;
+    let pagesWithText = 0;
+
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
       const page = await pdf.getPage(pageNum);
       const textContent = await page.getTextContent();
@@ -151,19 +157,56 @@ async function readPdfFile(file: File): Promise<FileReadResult> {
 
       const pageText = textItems.map((item) => item.str).join(' ');
       fullText += pageText + '\n\n';
-
-      console.log(`[PDF解析] 第 ${pageNum} 页解析完成，字符数: ${pageText.length}`);
+      totalCharacters += pageText.length;
+      if (pageText.length > 0) {
+        pagesWithText++;
+      }
     }
 
     fullText = fullText.trim();
-    console.log(`[PDF解析] 全部解析完成，总字符数: ${fullText.length}`);
+    console.log(`[PDF解析] 全部解析完成，总字符数: ${totalCharacters}，有文字页数: ${pagesWithText}/${pdf.numPages}`);
 
-    if (fullText.length === 0) {
+    if (totalCharacters === 0) {
       console.log(`[PDF解析] 警告: PDF内容为空，可能是扫描版PDF`);
+      const hint = `PDF文件内容为空或无法提取文字。
+
+这可能是扫描版PDF（图片型PDF），这类文件只包含图片，无法直接提取文字。
+
+建议操作：
+1. 使用OCR软件（如天若OCR、百度OCR、微信/QQ截图识别）识别图片中的文字
+2. 将识别后的文字复制到记事本中保存为 .txt 文件
+3. 再上传 .txt 文件进行分析
+
+如何判断是否为扫描版PDF：
+- 扫描版PDF：文件通常较大（几MB以上），放大后文字边缘模糊
+- 文本型PDF：可以直接选中复制文字，文件通常较小
+
+如果不是扫描版PDF，也可以尝试：
+• 使用Adobe Acrobat打开PDF，选择"另存为"→"文本文件"
+• 或在浏览器中打开PDF，按Ctrl+A全选后复制文字`;
       return {
         text: '',
         formatSupported: false,
-        hint: 'PDF文件内容为空或无法提取文字。如果是扫描版PDF，请先用OCR软件识别文字后保存为.txt文件再上传。',
+        hint,
+      };
+    }
+
+    if (totalCharacters < 50) {
+      console.log(`[PDF解析] 警告: PDF内容过短`);
+      const hint = `PDF文件内容过短（仅${totalCharacters}个字符）。
+
+可能原因：
+1. PDF文件只有少量文字
+2. PDF文件包含大量图片，文字很少
+3. 文件内容未被正确提取
+
+建议操作：
+• 检查PDF文件内容是否完整
+• 尝试手动复制PDF中的文字到.txt文件后再上传`;
+      return {
+        text: fullText,
+        formatSupported: totalCharacters >= 10,
+        hint,
       };
     }
 

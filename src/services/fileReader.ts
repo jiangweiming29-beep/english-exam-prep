@@ -1,6 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.js';
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.1.200/pdf.worker.min.js';
 
 export interface FileReadResult {
   text: string;
@@ -96,50 +96,70 @@ export async function readFileAsText(file: File): Promise<FileReadResult> {
 
 async function readPdfFile(file: File): Promise<FileReadResult> {
   try {
+    console.log(`[PDF解析] 开始解析文件: ${file.name}, 大小: ${file.size} bytes`);
+    
     const arrayBuffer = await file.arrayBuffer();
+    console.log(`[PDF解析] 文件读取完成，字节数: ${arrayBuffer.byteLength}`);
+    
     const pdf = await pdfjsLib.getDocument({
       data: arrayBuffer,
       useWorkerFetch: false,
     }).promise;
-
+    
+    console.log(`[PDF解析] PDF文档加载成功，页数: ${pdf.numPages}`);
+    
     let fullText = '';
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
       const page = await pdf.getPage(pageNum);
       const textContent = await page.getTextContent();
-      const pageText = (textContent.items as any[])
-        .filter((item) => typeof item === 'object' && item !== null && 'str' in item)
-        .map((item) => item.str)
-        .join('');
+      
+      const textItems = (textContent.items as any[])
+        .filter((item) => typeof item === 'object' && item !== null && 'str' in item);
+      
+      const pageText = textItems.map((item) => item.str).join('');
       fullText += pageText + '\n\n';
+      
+      console.log(`[PDF解析] 第 ${pageNum} 页解析完成，字符数: ${pageText.length}`);
     }
-
+    
     fullText = fullText.trim();
-
+    console.log(`[PDF解析] 全部解析完成，总字符数: ${fullText.length}`);
+    
     if (fullText.length === 0) {
+      console.log(`[PDF解析] 警告: PDF内容为空，可能是扫描版PDF`);
       return {
         text: '',
         formatSupported: false,
         hint: 'PDF文件内容为空或无法提取文字。如果是扫描版PDF，请先用OCR软件识别文字后保存为.txt文件再上传。',
       };
     }
-
+    
     return {
       text: fullText,
       formatSupported: true,
     };
   } catch (error) {
     let errorMessage = '未知错误';
+    let errorName = 'UnknownError';
+    
     if (error instanceof Error) {
       errorMessage = error.message;
+      errorName = error.name;
     }
-
+    
+    console.error(`[PDF解析] 失败 - ${errorName}: ${errorMessage}`, error);
+    
     let hint = '';
-    if (errorMessage.includes('Invalid PDF structure')) {
+    if (errorMessage.includes('Invalid PDF structure') || errorMessage.includes('Cannot read')) {
       hint = 'PDF文件格式无效或已损坏。请检查文件是否完整，或尝试重新下载。';
     } else if (errorMessage.includes('Password')) {
-      hint = 'PDF文件受密码保护。请先移除密码保护，或将内容复制到.txt文件后再上传。';
+      hint = 'PDF文件受密码保护。请先移除密码保护，或将内容复制到.txt文件后上传。';
     } else if (errorMessage.includes('Failed to fetch')) {
       hint = 'PDF解析服务加载失败，请检查网络连接，或尝试将PDF内容复制到.txt文件后上传。';
+    } else if (errorMessage.includes('Worker') || errorMessage.includes('worker')) {
+      hint = 'PDF解析引擎初始化失败，请刷新页面重试，或尝试将PDF内容复制到.txt文件后上传。';
+    } else if (errorName === 'TypeError') {
+      hint = 'PDF解析过程中发生类型错误，请尝试使用其他PDF阅读器打开文件确认文件是否正常。';
     } else {
       hint = `PDF解析失败: ${errorMessage}
 
@@ -148,7 +168,17 @@ async function readPdfFile(file: File): Promise<FileReadResult> {
 2. 如果文件正常，将内容复制到.txt文件后再上传
 3. 如果是扫描版PDF，请先用OCR软件识别文字`;
     }
-
+    
+    logError({
+      type: 'pdf_parse',
+      fileName: file.name,
+      fileType: file.type,
+      fileSize: file.size,
+      errorMessage: `${errorName}: ${errorMessage}`,
+      errorStack: error instanceof Error ? error.stack : undefined,
+      details: hint,
+    });
+    
     return {
       text: '',
       formatSupported: false,

@@ -1,8 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
-
 export interface FileReadResult {
   text: string;
   formatSupported: boolean;
@@ -98,6 +96,7 @@ export async function readFileAsText(file: File): Promise<FileReadResult> {
 async function readPdfFile(file: File): Promise<FileReadResult> {
   try {
     console.log(`[PDF解析] 开始解析文件: ${file.name}, 大小: ${file.size} bytes`);
+    console.log(`[PDF解析] Worker路径: ${pdfWorker}`);
     
     const arrayBuffer = await file.arrayBuffer();
     console.log(`[PDF解析] 文件读取完成，字节数: ${arrayBuffer.byteLength}`);
@@ -105,6 +104,7 @@ async function readPdfFile(file: File): Promise<FileReadResult> {
     const pdf = await pdfjsLib.getDocument({
       data: arrayBuffer,
       useWorkerFetch: false,
+      worker: new Worker(pdfWorker) as any,
     }).promise;
     
     console.log(`[PDF解析] PDF文档加载成功，页数: ${pdf.numPages}`);
@@ -117,7 +117,7 @@ async function readPdfFile(file: File): Promise<FileReadResult> {
       const textItems = (textContent.items as any[])
         .filter((item) => typeof item === 'object' && item !== null && 'str' in item);
       
-      const pageText = textItems.map((item) => item.str).join('');
+      const pageText = textItems.map((item) => item.str).join(' ');
       fullText += pageText + '\n\n';
       
       console.log(`[PDF解析] 第 ${pageNum} 页解析完成，字符数: ${pageText.length}`);

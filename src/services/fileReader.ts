@@ -1,6 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.1.200/pdf.worker.min.js';
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export interface FileReadResult {
   text: string;

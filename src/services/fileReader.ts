@@ -1,4 +1,10 @@
-import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
+// PDF解析服务 - 使用CDN动态加载pdfjs-dist
+import { logError } from './errorLogger';
+import type { ErrorLog } from './errorLogger';
+
+// 重新导出错误日志相关功能，保持向后兼容
+export { logError, getErrorLogs, clearErrorLogs } from './errorLogger';
+export type { ErrorLog };
 
 export interface FileReadResult {
   text: string;
@@ -6,17 +12,53 @@ export interface FileReadResult {
   hint?: string;
 }
 
-export interface ErrorLog {
-  id: string;
-  timestamp: Date;
-  type: 'file_read' | 'pdf_parse' | 'upload' | 'analysis' | 'other';
-  fileName?: string;
-  fileType?: string;
-  fileSize?: number;
-  errorMessage: string;
-  errorStack?: string;
-  details?: string;
-  courseId?: string;
+// PDF.js CDN配置 - 使用稳定版本3.11.174
+const PDFJS_CDN_VERSION = '3.11.174';
+const PDFJS_CDN_BASE = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_CDN_VERSION}`;
+const PDFJS_MAIN_URL = `${PDFJS_CDN_BASE}/pdf.min.js`;
+const PDFJS_WORKER_URL = `${PDFJS_CDN_BASE}/pdf.worker.min.js`;
+
+let pdfjsLibLoaded: any = null;
+
+// 动态加载pdfjs-dist主库
+async function loadPdfjsLib(): Promise<any> {
+  if (pdfjsLibLoaded) {
+    return pdfjsLibLoaded;
+  }
+
+  console.log(`[PDF解析] 正在从CDN加载pdfjs-dist: ${PDFJS_MAIN_URL}`);
+
+  return new Promise((resolve, reject) => {
+    // 检查是否已加载
+    if ((window as any).pdfjsLib) {
+      pdfjsLibLoaded = (window as any).pdfjsLib;
+      // 设置worker
+      pdfjsLibLoaded.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+      console.log('[PDF解析] pdfjs-dist已加载（缓存）');
+      resolve(pdfjsLibLoaded);
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = PDFJS_MAIN_URL;
+    script.async = true;
+    script.onload = () => {
+      const lib = (window as any).pdfjsLib;
+      if (!lib) {
+        reject(new Error('pdfjs-dist加载失败：全局对象未找到'));
+        return;
+      }
+      // 设置worker路径
+      lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_URL;
+      pdfjsLibLoaded = lib;
+      console.log('[PDF解析] pdfjs-dist加载成功');
+      resolve(lib);
+    };
+    script.onerror = () => {
+      reject(new Error(`pdfjs-dist加载失败：无法加载 ${PDFJS_MAIN_URL}`));
+    };
+    document.head.appendChild(script);
+  });
 }
 
 export async function readFileAsText(file: File): Promise<FileReadResult> {
@@ -86,34 +128,36 @@ async function readFileAsTextRaw(file: File): Promise<string> {
 async function readPdfFile(file: File): Promise<FileReadResult> {
   try {
     console.log(`[PDF解析] 开始解析文件: ${file.name}, 大小: ${file.size} bytes`);
-    
+
+    // 动态加载pdfjs-dist
+    const pdfjsLib = await loadPdfjsLib();
+
     const arrayBuffer = await file.arrayBuffer();
     console.log(`[PDF解析] 文件读取完成，字节数: ${arrayBuffer.byteLength}`);
-    
+
     const pdf = await pdfjsLib.getDocument({
       data: arrayBuffer,
-      disableWorker: true,
     }).promise;
-    
+
     console.log(`[PDF解析] PDF文档加载成功，页数: ${pdf.numPages}`);
-    
+
     let fullText = '';
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
       const page = await pdf.getPage(pageNum);
       const textContent = await page.getTextContent();
-      
+
       const textItems = (textContent.items as any[])
         .filter((item) => typeof item === 'object' && item !== null && 'str' in item);
-      
+
       const pageText = textItems.map((item) => item.str).join(' ');
       fullText += pageText + '\n\n';
-      
+
       console.log(`[PDF解析] 第 ${pageNum} 页解析完成，字符数: ${pageText.length}`);
     }
-    
+
     fullText = fullText.trim();
     console.log(`[PDF解析] 全部解析完成，总字符数: ${fullText.length}`);
-    
+
     if (fullText.length === 0) {
       console.log(`[PDF解析] 警告: PDF内容为空，可能是扫描版PDF`);
       return {
@@ -122,7 +166,7 @@ async function readPdfFile(file: File): Promise<FileReadResult> {
         hint: 'PDF文件内容为空或无法提取文字。如果是扫描版PDF，请先用OCR软件识别文字后保存为.txt文件再上传。',
       };
     }
-    
+
     return {
       text: fullText,
       formatSupported: true,
@@ -130,20 +174,20 @@ async function readPdfFile(file: File): Promise<FileReadResult> {
   } catch (error) {
     let errorMessage = '未知错误';
     let errorName = 'UnknownError';
-    
+
     if (error instanceof Error) {
       errorMessage = error.message;
       errorName = error.name;
     }
-    
+
     console.error(`[PDF解析] 失败 - ${errorName}: ${errorMessage}`, error);
-    
+
     let hint = '';
     if (errorMessage.includes('Invalid PDF structure') || errorMessage.includes('Cannot read')) {
       hint = 'PDF文件格式无效或已损坏。请检查文件是否完整，或尝试重新下载。';
     } else if (errorMessage.includes('Password')) {
       hint = 'PDF文件受密码保护。请先移除密码保护，或将内容复制到.txt文件后上传。';
-    } else if (errorMessage.includes('Failed to fetch')) {
+    } else if (errorMessage.includes('Failed to fetch') || errorMessage.includes('loadPdfjsLib')) {
       hint = 'PDF解析服务加载失败，请检查网络连接，或尝试将PDF内容复制到.txt文件后上传。';
     } else if (errorMessage.includes('Worker') || errorMessage.includes('worker')) {
       hint = 'PDF解析引擎初始化失败，请刷新页面重试，或尝试将PDF内容复制到.txt文件后上传。';
@@ -157,7 +201,7 @@ async function readPdfFile(file: File): Promise<FileReadResult> {
 2. 如果文件正常，将内容复制到.txt文件后再上传
 3. 如果是扫描版PDF，请先用OCR软件识别文字`;
     }
-    
+
     logError({
       type: 'pdf_parse',
       fileName: file.name,
@@ -167,7 +211,7 @@ async function readPdfFile(file: File): Promise<FileReadResult> {
       errorStack: error instanceof Error ? error.stack : undefined,
       details: hint,
     });
-    
+
     return {
       text: '',
       formatSupported: false,
@@ -191,37 +235,4 @@ export function estimateQuestionCount(text: string): number {
   const numberedPattern = /\d+\.\s/g;
   const matches = text.match(numberedPattern);
   return matches ? matches.length : 0;
-}
-
-export function logError(log: Omit<ErrorLog, 'id' | 'timestamp'>): void {
-  const errorLog: ErrorLog = {
-    ...log,
-    id: crypto.randomUUID(),
-    timestamp: new Date(),
-  };
-
-  try {
-    const logs = JSON.parse(localStorage.getItem('errorLogs') || '[]');
-    logs.push(errorLog);
-    if (logs.length > 100) {
-      logs.splice(0, logs.length - 100);
-    }
-    localStorage.setItem('errorLogs', JSON.stringify(logs));
-  } catch {
-    console.error('Failed to save error log');
-  }
-
-  console.error('Error Log:', errorLog);
-}
-
-export function getErrorLogs(): ErrorLog[] {
-  try {
-    return JSON.parse(localStorage.getItem('errorLogs') || '[]');
-  } catch {
-    return [];
-  }
-}
-
-export function clearErrorLogs(): void {
-  localStorage.removeItem('errorLogs');
 }

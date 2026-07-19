@@ -4,7 +4,15 @@ import tsconfigPaths from "vite-tsconfig-paths";
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: process.env.VITE_BASE_PATH || '/',
+  // GitHub Pages 部署时使用 /yuxi-codex/ 作为 base 路径
+  // 本地开发时使用 '/'
+  base: process.env.GITHUB_PAGES ? '/yuxi-codex/' : '/',
+  server: {
+    allowedHosts: true,
+  },
+  preview: {
+    allowedHosts: true,
+  },
   build: {
     sourcemap: 'hidden',
   },

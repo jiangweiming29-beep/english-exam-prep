@@ -51,6 +51,8 @@ export interface UploadedFile {
   name: string;
   fileName: string;
   size: number;
+  extractedText?: string;
+  uploadStatus: 'uploading' | 'extracting' | 'ready' | 'error' | 'format_not_supported';
   uploadedAt: Date;
 }
 

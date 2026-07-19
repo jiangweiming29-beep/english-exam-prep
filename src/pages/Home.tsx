@@ -11,28 +11,40 @@ import {
   Sparkles,
   Target,
   Zap,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { StarRating } from '@/components/StarRating';
 import { cn } from '@/lib/utils';
+import type { Course } from '@/types';
 
 export default function Home() {
   const navigate = useNavigate();
-  const { courses, initMockData, setCurrentCourse } = useAppStore();
+  const { courses, initMockData, setCurrentCourse, deleteCourse, hydrateFromDB, isHydrated, hasInitedMock, createCourse } = useAppStore();
   const [showNewModal, setShowNewModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletingCourse, setDeletingCourse] = useState<Course | null>(null);
   const [courseName, setCourseName] = useState('');
   const [courseUnit, setCourseUnit] = useState('');
 
   useEffect(() => {
-    if (courses.length === 0) {
+    hydrateFromDB();
+  }, []);
+
+  useEffect(() => {
+    if (isHydrated && !hasInitedMock && courses.length === 0) {
       initMockData();
     }
-  }, []);
+  }, [isHydrated, courses.length, hasInitedMock, initMockData]);
 
   const handleCreateCourse = () => {
     if (!courseName.trim()) return;
+    const newCourse = createCourse(courseName.trim(), courseUnit.trim() || '未指定单元');
     navigate('/upload');
     setShowNewModal(false);
+    setCourseName('');
+    setCourseUnit('');
   };
 
   const features = [
@@ -128,7 +140,7 @@ export default function Home() {
               {courses.map((course, index) => (
                 <div
                   key={course.id}
-                  className="card card-content cursor-pointer group animate-slide-up"
+                  className="card card-content cursor-pointer group animate-slide-up relative"
                   style={{ animationDelay: `${index * 0.1}s` }}
                   onClick={() => {
                     setCurrentCourse(course.id);
@@ -139,17 +151,30 @@ export default function Home() {
                     <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center">
                       <BookOpen size={22} className="text-white" />
                     </div>
-                    <span className={cn(
-                      'tag',
-                      course.analysisStatus === 'completed'
-                        ? 'bg-emerald-100 text-emerald-700'
-                        : course.analysisStatus === 'analyzing'
-                        ? 'bg-amber-100 text-amber-700'
-                        : 'bg-slate-100 text-slate-600'
-                    )}>
-                      {course.analysisStatus === 'completed' ? '分析完成' :
-                       course.analysisStatus === 'analyzing' ? '分析中' : '待分析'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={cn(
+                        'tag',
+                        course.analysisStatus === 'completed'
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : course.analysisStatus === 'analyzing'
+                          ? 'bg-amber-100 text-amber-700'
+                          : 'bg-slate-100 text-slate-600'
+                      )}>
+                        {course.analysisStatus === 'completed' ? '分析完成' :
+                         course.analysisStatus === 'analyzing' ? '分析中' : '待分析'}
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeletingCourse(course);
+                          setShowDeleteModal(true);
+                        }}
+                        className="p-1.5 rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
+                        title="删除课程"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   </div>
                   
                   <h3 className="text-lg font-bold text-primary-900 mb-1 group-hover:text-primary-700 transition-colors">
@@ -284,6 +309,48 @@ export default function Home() {
                 className="flex-1 btn-primary"
               >
                 下一步
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDeleteModal && deletingCourse && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="card card-content w-full max-w-md animate-slide-up">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle size={24} className="text-red-600" />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-primary-900">确认删除</h3>
+              </div>
+            </div>
+            <p className="text-slate-600 mb-2">
+              确定要删除课程 <span className="font-semibold text-primary-800">「{deletingCourse.name}」</span> 吗？
+            </p>
+            <p className="text-sm text-slate-500 mb-6">
+              删除后所有分析数据、试卷、报告都会被清空，且无法恢复。
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowDeleteModal(false);
+                  setDeletingCourse(null);
+                }}
+                className="flex-1 btn-secondary"
+              >
+                取消
+              </button>
+              <button
+                onClick={async () => {
+                  await deleteCourse(deletingCourse.id);
+                  setShowDeleteModal(false);
+                  setDeletingCourse(null);
+                }}
+                className="flex-1 bg-red-500 hover:bg-red-600 text-white font-medium py-2.5 px-4 rounded-xl transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-red-500/20"
+              >
+                确认删除
               </button>
             </div>
           </div>

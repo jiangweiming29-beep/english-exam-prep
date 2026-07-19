@@ -8,24 +8,17 @@ import TextbookMapping from '@/pages/TextbookMapping';
 import PreviewPlan from '@/pages/PreviewPlan';
 import FullReport from '@/pages/FullReport';
 import { AnalysisLayout } from '@/components/AnalysisLayout';
-import { useAppStore } from '@/store/useAppStore';
-import { useEffect } from 'react';
 
 function AnalysisRoute({ children }: { children: React.ReactNode }) {
   return <AnalysisLayout>{children}</AnalysisLayout>;
 }
 
+// GitHub Pages 部署时需要设置 basename
+const routerBasename = import.meta.env.BASE_URL;
+
 export default function App() {
-  const { initMockData, courses } = useAppStore();
-
-  useEffect(() => {
-    if (courses.length === 0) {
-      initMockData();
-    }
-  }, [courses.length, initMockData]);
-
   return (
-    <Router>
+    <Router basename={routerBasename}>
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/upload" element={<Upload />} />

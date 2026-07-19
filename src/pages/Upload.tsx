@@ -9,12 +9,16 @@ import {
   X,
   ChevronLeft,
   Sparkles,
+  Loader2,
+  AlertCircle,
+  CheckCircle2,
   type LucideIcon,
 } from 'lucide-react';
 import { useAppStore } from '@/store/useAppStore';
 import { cn } from '@/lib/utils';
 import type { FileType, UploadedFile } from '@/types';
 import { fileTypeLabels } from '@/types';
+import { readFileAsText, cleanExtractedText } from '@/services/fileReader';
 
 interface UploadZoneProps {
   type: FileType;
@@ -78,6 +82,39 @@ function UploadZone({
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  const getStatusIcon = (status?: UploadedFile['uploadStatus']) => {
+    switch (status) {
+      case 'uploading':
+      case 'extracting':
+        return <Loader2 size={14} className="animate-spin text-primary-500" />;
+      case 'ready':
+        return <CheckCircle2 size={14} className="text-green-500" />;
+      case 'format_not_supported':
+        return <AlertCircle size={14} className="text-amber-500" />;
+      case 'error':
+        return <AlertCircle size={14} className="text-red-500" />;
+      default:
+        return null;
+    }
+  };
+
+  const getStatusText = (status?: UploadedFile['uploadStatus']): string => {
+    switch (status) {
+      case 'uploading':
+        return '上传中...';
+      case 'extracting':
+        return '解析中...';
+      case 'ready':
+        return '已就绪';
+      case 'format_not_supported':
+        return '格式不支持';
+      case 'error':
+        return '解析失败';
+      default:
+        return '';
+    }
   };
 
   return (
@@ -173,17 +210,32 @@ function UploadZone({
                     highlighted ? 'bg-accent-100' : 'bg-primary-100'
                   )}
                 >
-                  <FileText
-                    size={14}
-                    className={highlighted ? 'text-accent-600' : 'text-primary-600'}
-                  />
+                  {getStatusIcon(file.uploadStatus) || (
+                    <FileText
+                      size={14}
+                      className={highlighted ? 'text-accent-600' : 'text-primary-600'}
+                    />
+                  )}
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-slate-700 truncate">
                     {file.fileName}
                   </p>
-                  <p className="text-xs text-slate-400">
-                    {formatFileSize(file.size)}
+                  <p className="text-xs text-slate-400 flex items-center gap-2">
+                    <span>{formatFileSize(file.size)}</span>
+                    {file.uploadStatus && (
+                      <>
+                        <span>·</span>
+                        <span className={cn(
+                          file.uploadStatus === 'ready' && 'text-green-600',
+                          file.uploadStatus === 'error' && 'text-red-600',
+                          file.uploadStatus === 'format_not_supported' && 'text-amber-600',
+                          (file.uploadStatus === 'uploading' || file.uploadStatus === 'extracting') && 'text-primary-600',
+                        )}>
+                          {getStatusText(file.uploadStatus)}
+                        </span>
+                      </>
+                    )}
                   </p>
                 </div>
               </div>
@@ -212,8 +264,17 @@ function UploadZone({
 
 export default function Upload() {
   const navigate = useNavigate();
-  const { getCurrentCourse, addUploadedFile, removeUploadedFile } = useAppStore();
+  const {
+    getCurrentCourse,
+    addUploadedFile,
+    removeUploadedFile,
+    updateUploadedFile,
+    analyzeUploadedPapers,
+    setAnalysisStatus,
+  } = useAppStore();
   const course = getCurrentCourse();
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
 
   const uploadConfigs = [
     {
@@ -254,14 +315,59 @@ export default function Upload() {
     return course?.uploadedFiles.filter((f) => f.type === type) || [];
   };
 
-  const handleFileSelect = (type: FileType, file: File) => {
+  const handleFileSelect = async (type: FileType, file: File) => {
     if (!course) return;
-    addUploadedFile(course.id, {
+
+    const newFileId = addUploadedFile(course.id, {
       type,
       name: file.name.replace(/\.[^/.]+$/, ''),
       fileName: file.name,
       size: file.size,
+      uploadStatus: 'uploading',
     });
+
+    setTimeout(async () => {
+      if (!course) return;
+
+      try {
+        updateUploadedFile(course.id, newFileId, { uploadStatus: 'extracting' });
+
+        let extractedText = '';
+        let formatSupported = true;
+        let hint = '';
+        try {
+          const result = await readFileAsText(file);
+          extractedText = result.text;
+          formatSupported = result.formatSupported;
+          hint = result.hint || '';
+          if (formatSupported && extractedText) {
+            extractedText = cleanExtractedText(extractedText);
+          }
+        } catch (e) {
+          extractedText = '';
+          formatSupported = false;
+        }
+
+        if (!formatSupported) {
+          updateUploadedFile(course.id, newFileId, {
+            uploadStatus: 'format_not_supported',
+            extractedText: hint,
+          });
+        } else if (extractedText && extractedText.length > 50) {
+          updateUploadedFile(course.id, newFileId, {
+            uploadStatus: 'ready',
+            extractedText,
+          });
+        } else {
+          updateUploadedFile(course.id, newFileId, {
+            uploadStatus: 'error',
+            extractedText: '',
+          });
+        }
+      } catch (error) {
+        updateUploadedFile(course.id, newFileId, { uploadStatus: 'error' });
+      }
+    }, 300);
   };
 
   const handleFileRemove = (type: FileType, fileId: string) => {
@@ -270,14 +376,32 @@ export default function Upload() {
   };
 
   const examPaperCount = getFilesByType('exam_paper').length;
-  const canStartAnalysis = examPaperCount >= 1;
+  const readyPaperCount = getFilesByType('exam_paper').filter(f => f.uploadStatus === 'ready').length;
+  const canStartAnalysis = readyPaperCount >= 1 && !isAnalyzing;
 
-  const handleStartAnalysis = () => {
-    if (!canStartAnalysis) return;
-    navigate('/analysis');
+  const handleStartAnalysis = async () => {
+    if (!canStartAnalysis || !course) return;
+
+    setIsAnalyzing(true);
+    setAnalysisProgress(10);
+    setAnalysisStatus(course.id, 'analyzing');
+
+    try {
+      setAnalysisProgress(30);
+      await analyzeUploadedPapers(course.id);
+      setAnalysisProgress(100);
+
+      setTimeout(() => {
+        navigate('/analysis');
+      }, 500);
+    } catch (error) {
+      setAnalysisStatus(course.id, 'pending');
+      setIsAnalyzing(false);
+    }
   };
 
   const totalFiles = course?.uploadedFiles.length || 0;
+  const readyFiles = course?.uploadedFiles.filter(f => f.uploadStatus === 'ready').length || 0;
 
   return (
     <div className="min-h-screen pb-32">
@@ -306,12 +430,34 @@ export default function Upload() {
             </div>
           </div>
           <p className="text-primary-100 max-w-2xl">
-            上传相关学习资料，系统将以试卷为核心，反推真正的考点和预习重点。
+            上传相关学习资料，系统将以试卷为核心，自动反推真正的考点和预习重点。
           </p>
         </div>
       </header>
 
       <div className="container mx-auto px-4 py-8">
+        {isAnalyzing && (
+          <div className="card card-content mb-6 animate-slide-up">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-accent-100 flex items-center justify-center flex-shrink-0">
+                <Loader2 size={24} className="text-accent-600 animate-spin" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-primary-900 mb-2">AI 智能分析中...</h3>
+                <div className="w-full bg-slate-200 rounded-full h-2">
+                  <div
+                    className="bg-gradient-to-r from-accent-400 to-accent-600 h-2 rounded-full transition-all duration-500"
+                    style={{ width: `${analysisProgress}%` }}
+                  />
+                </div>
+                <p className="text-sm text-slate-500 mt-2">
+                  正在逐题分析试卷，提取核心考点...
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {uploadConfigs.map((config) => (
             <UploadZone
@@ -335,12 +481,12 @@ export default function Upload() {
               <Sparkles size={24} className="text-accent-600" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-primary-900 mb-1">分析说明</h3>
+              <h3 className="text-lg font-bold text-primary-900 mb-1">智能分析说明</h3>
               <ul className="text-sm text-slate-600 space-y-1">
                 <li>• 试卷为最高权重分析依据，建议上传2份以上效果更佳</li>
-                <li>• 教材用于将考点映射到具体章节和内容</li>
-                <li>• 教案和笔记作为辅助参考，帮助优化预习方案</li>
-                <li>• 所有文件仅在本地处理，不会上传到服务器</li>
+                <li>• 系统自动识别题目、提取考点、交叉对比生成排行榜</li>
+                <li>• <span className="text-accent-600 font-medium">💡 小提示：</span>支持 .txt 文本文件；如果是图片或PDF，请先复制内容存为文本文件</li>
+                <li>• 所有文件仅在本地浏览器处理，不会上传到任何服务器</li>
               </ul>
             </div>
           </div>
@@ -352,15 +498,15 @@ export default function Upload() {
           <div className="flex items-center gap-4">
             <div className="text-sm">
               <span className="text-slate-500">已上传文件：</span>
-              <span className="font-bold text-primary-700">{totalFiles}</span>
-              <span className="text-slate-400 ml-1">份</span>
+              <span className="font-bold text-primary-700">{readyFiles}/{totalFiles}</span>
+              <span className="text-slate-400 ml-1">份就绪</span>
             </div>
             <div className="text-sm">
               <span className="text-slate-500">试卷：</span>
-              <span className={cn('font-bold', examPaperCount > 0 ? 'text-accent-600' : 'text-slate-400')}>
-                {examPaperCount}
+              <span className={cn('font-bold', readyPaperCount > 0 ? 'text-accent-600' : 'text-slate-400')}>
+                {readyPaperCount}
               </span>
-              <span className="text-slate-400 ml-1">份</span>
+              <span className="text-slate-400 ml-1">份就绪</span>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -371,18 +517,27 @@ export default function Upload() {
               onClick={handleStartAnalysis}
               disabled={!canStartAnalysis}
               className={cn(
-                'btn-accent flex items-center gap-2',
+                'btn-accent flex items-center gap-2 min-w-[140px] justify-center',
                 !canStartAnalysis && 'opacity-50 cursor-not-allowed hover:translate-y-0 hover:shadow-md'
               )}
             >
-              <Sparkles size={18} />
-              开始分析
+              {isAnalyzing ? (
+                <>
+                  <Loader2 size={18} className="animate-spin" />
+                  分析中...
+                </>
+              ) : (
+                <>
+                  <Sparkles size={18} />
+                  开始智能分析
+                </>
+              )}
             </button>
           </div>
         </div>
       </div>
 
-      {!canStartAnalysis && (
+      {!canStartAnalysis && !isAnalyzing && examPaperCount === 0 && (
         <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50">
           <div className="bg-slate-800 text-white text-sm px-4 py-2 rounded-full shadow-lg animate-pulse-slow">
             请至少上传 1 份试卷后开始分析

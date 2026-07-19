@@ -1,5 +1,4 @@
-import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
 
 export interface FileReadResult {
   text: string;
@@ -21,33 +20,18 @@ export interface ErrorLog {
 }
 
 export async function readFileAsText(file: File): Promise<FileReadResult> {
-  return new Promise((resolve, reject) => {
-    const fileName = file.name.toLowerCase();
+  const fileName = file.name.toLowerCase();
 
-    if (fileName.endsWith('.pdf')) {
-      readPdfFile(file)
-        .then((result) => resolve(result))
-        .catch((error) => {
-          reject(new Error(`PDF解析失败: ${error.message}`));
-        });
-    } else if (fileName.endsWith('.txt')) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const text = e.target?.result as string || '';
-        resolve({ text, formatSupported: true });
-      };
-      reader.onerror = () => reject(new Error('文件读取失败'));
-      reader.readAsText(file, 'UTF-8');
-    } else if (file.type.startsWith('text/')) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const text = e.target?.result as string || '';
-        resolve({ text, formatSupported: true });
-      };
-      reader.onerror = () => reject(new Error('文件读取失败'));
-      reader.readAsText(file, 'UTF-8');
-    } else if (file.type.startsWith('image/')) {
-      const hint = `当前版本暂不支持图片OCR文字识别。
+  if (fileName.endsWith('.pdf')) {
+    return readPdfFile(file);
+  } else if (fileName.endsWith('.txt')) {
+    const text = await readFileAsTextRaw(file);
+    return { text, formatSupported: true };
+  } else if (file.type.startsWith('text/')) {
+    const text = await readFileAsTextRaw(file);
+    return { text, formatSupported: true };
+  } else if (file.type.startsWith('image/')) {
+    const hint = `当前版本暂不支持图片OCR文字识别。
 
 建议操作：
 1. 将图片中的文字内容复制出来
@@ -59,9 +43,9 @@ export async function readFileAsText(file: File): Promise<FileReadResult> {
 - 填空题：1. ____________
 - 阅读理解：Passage 1 / 阅读短文...
 - 写作题：书面表达 / 写作`;
-      resolve({ text: '', formatSupported: false, hint });
-    } else if (fileName.endsWith('.doc') || fileName.endsWith('.docx')) {
-      const hint = `当前版本暂不支持直接解析Word文件内容。
+    return { text: '', formatSupported: false, hint };
+  } else if (fileName.endsWith('.doc') || fileName.endsWith('.docx')) {
+    const hint = `当前版本暂不支持直接解析Word文件内容。
 
 建议操作：
 1. 打开Word文档，全选文字（Ctrl+A）
@@ -73,38 +57,42 @@ export async function readFileAsText(file: File): Promise<FileReadResult> {
 注意：
 • 请确保保留题目编号和选项格式
 • 阅读文章和写作题也要完整复制`;
-      resolve({ text: '', formatSupported: false, hint });
-    } else {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const result = e.target?.result;
-        let text = '';
-        if (typeof result === 'string') {
-          text = result;
-        } else if (result instanceof ArrayBuffer) {
-          const decoder = new TextDecoder('utf-8');
-          text = decoder.decode(result);
-        }
-        resolve({ text, formatSupported: true });
-      };
-      reader.onerror = () => reject(new Error('文件读取失败'));
-      reader.readAsText(file, 'UTF-8');
-    }
+    return { text: '', formatSupported: false, hint };
+  } else {
+    const text = await readFileAsTextRaw(file);
+    return { text, formatSupported: true };
+  }
+}
+
+async function readFileAsTextRaw(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = e.target?.result;
+      if (typeof result === 'string') {
+        resolve(result);
+      } else if (result instanceof ArrayBuffer) {
+        const decoder = new TextDecoder('utf-8');
+        resolve(decoder.decode(result));
+      } else {
+        resolve('');
+      }
+    };
+    reader.onerror = () => reject(new Error('文件读取失败'));
+    reader.readAsText(file, 'UTF-8');
   });
 }
 
 async function readPdfFile(file: File): Promise<FileReadResult> {
   try {
     console.log(`[PDF解析] 开始解析文件: ${file.name}, 大小: ${file.size} bytes`);
-    console.log(`[PDF解析] Worker路径: ${pdfWorker}`);
     
     const arrayBuffer = await file.arrayBuffer();
     console.log(`[PDF解析] 文件读取完成，字节数: ${arrayBuffer.byteLength}`);
     
     const pdf = await pdfjsLib.getDocument({
       data: arrayBuffer,
-      useWorkerFetch: false,
-      worker: new Worker(pdfWorker) as any,
+      disableWorker: true,
     }).promise;
     
     console.log(`[PDF解析] PDF文档加载成功，页数: ${pdf.numPages}`);
